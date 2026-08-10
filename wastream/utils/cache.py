@@ -6,7 +6,11 @@ from typing import Optional, List, Dict, Tuple
 from wastream.config.settings import settings
 from wastream.utils.helpers import create_cache_key
 from wastream.utils.logger import cache_logger
-from wastream.utils.database import update_cache_stats_on_set
+from wastream.utils.database import (
+    cache_stats_updates_suppressed,
+    run_database_operation,
+    update_cache_stats_on_set,
+)
 from wastream.utils.urls import canonicalize_results
 from wastream.utils.tasks import lancer_tache
 
@@ -105,13 +109,17 @@ async def set_cache(database, cache_type: str, title: str, year: Optional[str] =
                        ON CONFLICT (cache_key) DO UPDATE
                        SET content = :content, expires_at = :expires_at"""
 
-        await database.execute(query, {
-            "cache_key": cache_key,
-            "content": content,
-            "expires_at": expires_at
-        })
+        async def save_cache_row() -> None:
+            await database.execute(query, {
+                "cache_key": cache_key,
+                "content": content,
+                "expires_at": expires_at
+            })
 
-        lancer_tache(update_cache_stats_on_set(cache_key, results or [], old_results))
+        await run_database_operation(save_cache_row, "content cache save")
+
+        if not cache_stats_updates_suppressed():
+            lancer_tache(update_cache_stats_on_set(cache_key, results or [], old_results))
 
         ttl_str = "permanent" if ttl == -1 else f"{ttl}s"
         cache_logger.debug(f"Saved: {cache_type} {title} ({year}) - {len(results or [])} results ({ttl_str})")
@@ -141,12 +149,16 @@ async def set_cache_if_not_exists(
             expires_at = current_time + ttl
         content = json.dumps(canonicalize_results(results or []))
 
-        await database.execute(
-            "INSERT INTO content_cache (cache_key, content, expires_at) VALUES (:cache_key, :content, :expires_at)",
-            {"cache_key": cache_key, "content": content, "expires_at": expires_at}
-        )
+        async def insert_cache_row() -> None:
+            await database.execute(
+                "INSERT INTO content_cache (cache_key, content, expires_at) VALUES (:cache_key, :content, :expires_at)",
+                {"cache_key": cache_key, "content": content, "expires_at": expires_at}
+            )
 
-        lancer_tache(update_cache_stats_on_set(cache_key, results or []))
+        await run_database_operation(insert_cache_row, "new content cache save")
+
+        if not cache_stats_updates_suppressed():
+            lancer_tache(update_cache_stats_on_set(cache_key, results or []))
 
         ttl_str = "permanent" if ttl == -1 else f"{ttl}s"
         cache_logger.debug(f"Saved (new): {cache_type} {title} ({year}) - {len(results or [])} results ({ttl_str})")
@@ -160,13 +172,6 @@ async def set_cache_if_not_exists(
 # Parallel Cache Lookup (Local + Remote)
 # ===========================
 async def get_cache_parallel(database, cache_type: str, title: str, year: Optional[str] = None) -> Tuple[Optional[List[Dict]], bool]:
-    """
-    Check local and remote cache in parallel.
-    Returns: (cached_data, should_store_from_remote)
-    - If local found: returns (data, False)
-    - If remote found: returns (data, should_store)
-    - If nothing found: returns (None, False)
-    """
     from wastream.services.remote import fetch_remote_cache
 
     async def check_local():

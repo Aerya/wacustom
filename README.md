@@ -5,7 +5,7 @@
 
 **Ce que ce fork ajoute par rapport à WAStream :**
 
-- **Sources consolidées en un seul addon** : Wawacity, Free-Telecharger, Movix, Webshare, trackers Torznab (YggReborn, Tr4ker, Torr9, C411), Zilean, et **Nyaa** (anime, flux RSS) - évite de maintenir 4-5 conteneurs séparés.
+- **Sources consolidées en un seul addon** : Wawacity, Free-Telecharger, Zone-Telechargement, Movix, Webshare, trackers Torznab (YggReborn, Tr4ker, Torr9, C411), Zilean, et **Nyaa** (anime, flux RSS) - évite de maintenir 4-5 conteneurs séparés.
 - **Support des torrents AllDebrid** : flux `magnet → upload → ready → files → unlock` (l'endpoint `/magnet/instant` ayant été retiré par AllDebrid, les torrents sont listés `uncached` avec débridage à la demande).
 - **Matching d'épisodes anime robuste** : gestion de la numérotation absolue et des mappings de saisons (`episode_matches`).
 - **Scraper Zilean** (index DMM public) et scraper UNIT3D natif (Gemini / Generation-Free).
@@ -88,6 +88,8 @@ Wacustom est un addon Stremio qui convertit des liens de téléchargement direct
 - **Protection par mot de passe** - protection optionnelle de l'addon par mot de passe
 - **Support base de données** - SQLite ou PostgreSQL
 - **Scraper Pastebin** - import automatique de liens depuis des URLs de paste externes, planifié
+- **Importeur Idrix** - import planifié de catalogues Rentry, TextUp et PrivateBin
+- **Synchronisation des domaines** - mise à jour optionnelle des domaines depuis les canaux Telegram configurés
 - **Cache des réponses HTTP** - mise en cache optionnelle basée sur les ETag pour les réponses de flux
 - **Intégration Kitsu** - métadonnées anime via l'API Kitsu avec mapping des chaînes de saisons
 
@@ -101,6 +103,8 @@ Wacustom est un addon Stremio qui convertit des liens de téléchargement direct
 - **WASource** - ajouter des liens personnalisés compatibles avec tous les services de débridage
 - **Système distant** - partager les liens morts, le cache et les liens personnalisés entre instances
 - **Scraper Pastebin** - état et stats des tâches d'import automatique
+- **Importeur Idrix** - état, lancement et arrêt des imports Rentry, TextUp et PrivateBin
+- **Synchronisation des domaines** - état et contrôle des mises à jour automatiques
 - **Explorateur du cache** - consulter le contenu mis en cache et supprimer des entrées ciblées
 - **Sauvegardes** - exporter ou importer WASource, les liens morts et le cache au format NDJSON compressé
 - **Réglages éditables** - modifier depuis l'administration les options non verrouillées par l'environnement, avec export/import sans secrets
@@ -229,6 +233,8 @@ Voir [`.env.example`](.env.example) pour toutes les options de configuration dis
 - `LOG_LEVEL` - niveau de log (DEBUG, INFO, ERROR)
 - `PROXY_URL` - proxy HTTP pour l'accès aux sources
 - `PASTEBIN_SCRAPER_URLS` - liste JSON d'URLs de paste pour l'import automatique
+- `IDRIX_SCRAPER_URLS` - liste JSON d'URLs Rentry, TextUp ou PrivateBin
+- `DOMAIN_SYNC_ENABLED` - active la synchronisation optionnelle des domaines
 - Et bien d'autres… (voir `.env.example`)
 
 ---

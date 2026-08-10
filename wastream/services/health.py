@@ -53,6 +53,7 @@ def _get_sources_config() -> Dict[str, Optional[str]]:
         "Darki-API": settings.DARKI_API_URL,
         "Movix": settings.MOVIX_API_URL,
         "Webshare": settings.WEBSHARE_URL,
+        "Zone-Telechargement": settings.ZONE_TELECHARGEMENT_URL,
         "YggReborn": settings.YGGREBORN_URL,
         "Tr4ker": settings.TR4KER_URL,
         "Torr9": settings.TORR9_URL,
@@ -61,6 +62,19 @@ def _get_sources_config() -> Dict[str, Optional[str]]:
         "Generation-Free": settings.GENERATIONFREE_URL,
         "Zilean": settings.ZILEAN_URL,
     }
+
+
+def _queue_domain_recheck(status: SourceStatus):
+    if status.status != "offline":
+        return
+    try:
+        from wastream.services.domain_sync import request_source_recheck
+        request_source_recheck(status.name)
+    except Exception as error:
+        api_logger.debug(
+            f"Domain recheck queue skipped for {status.name}: "
+            f"{type(error).__name__}: {error}"
+        )
 
 
 def _mask_url(url: Optional[str]) -> Optional[str]:
@@ -354,6 +368,7 @@ async def check_all_sources(force: bool = False) -> Dict[str, Any]:
 
         for status in source_results:
             _health_state.sources[status.name] = status
+            _queue_domain_recheck(status)
 
         for status in service_results:
             _health_state.services[status.name] = status
@@ -397,6 +412,7 @@ async def check_sources_only() -> Dict[str, Any]:
 
         for status in source_results:
             _health_state.sources[status.name] = status
+            _queue_domain_recheck(status)
 
         _health_state.last_sources_check = time.time()
         api_logger.debug(f"Sources check completed for {len(source_results)} sources")

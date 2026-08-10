@@ -10,6 +10,7 @@ from wastream.utils.helpers import quote_url_param, normalize_text, build_displa
 from wastream.utils.http_client import http_client
 from wastream.utils.logger import scraper_logger
 from wastream.utils.quality import quality_sort_key, normalize_quality
+from wastream.utils.release_parser import parse_release_info
 
 # ===========================
 # Category Mappings
@@ -572,8 +573,9 @@ class BaseFreeTelecharger:
 
             language_match = re.search(r"Langue\s*:\s*([^\n]+)", page_text)
             lang_text = language_match.group(1) if language_match else ""
-            language = self._extract_language_from_text(lang_text)
-            raw_language = self._extract_raw_language_from_text(lang_text)
+            language_info = parse_release_info(lang_text)
+            language = language_info["language"]
+            raw_language = language_info["raw_language"]
 
             size_match = re.search(r"Taille\s*:\s*([^\n]+)", page_text)
             size = normalize_size(size_match.group(1).strip() if size_match else "Unknown")
@@ -742,8 +744,9 @@ class BaseFreeTelecharger:
 
             language_match = re.search(r"Langue\s*:\s*([^\n]+)", page_text)
             lang_text_s = language_match.group(1) if language_match else ""
-            language = self._extract_language_from_text(lang_text_s)
-            raw_language = self._extract_raw_language_from_text(lang_text_s)
+            language_info = parse_release_info(lang_text_s)
+            language = language_info["language"]
+            raw_language = language_info["raw_language"]
 
             size_match = re.search(r"Taille\s*:\s*([^\n]+)", page_text)
             size = normalize_size(size_match.group(1).strip() if size_match else "Unknown")
