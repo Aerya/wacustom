@@ -39,6 +39,16 @@ IDRIX_USER_AGENT = "Mozilla/5.0 (compatible; WAStream/1.0)"
 RENTRY_HOSTS = {"rentry.co", "www.rentry.co"}
 TEXTUP_HOSTS = {"textup.fr", "www.textup.fr"}
 PRIVATEBIN_HOSTS = {"bin.idrix.fr", "www.bin.idrix.fr"}
+RENTRY_RESERVED_PATHS = {
+    "cdn-cgi",
+    "how",
+    "langs",
+    "metadata-example",
+    "metadata-how",
+    "request-login",
+    "rentry-text-colors",
+    "what",
+}
 
 ONEFICHIER_URL_RE = re.compile(
     r"https?://(?:[a-z0-9.-]+\.)?1fichier\.com/[^\s\"<>]+",
@@ -431,13 +441,17 @@ def _is_allowed_child(url: str, label: str) -> bool:
 
     host = _host(url)
     path = urlsplit(url).path.lower().rstrip("/")
-    if host in RENTRY_HOSTS and (
-        path.endswith("/raw")
-        or "/export-page" in path
-        or path.endswith("-edit")
-        or path.endswith("-repost")
-    ):
-        return False
+    if host in RENTRY_HOSTS:
+        segments = [segment for segment in path.split("/") if segment]
+        if len(segments) != 1:
+            return False
+        slug = segments[0]
+        if (
+            slug in RENTRY_RESERVED_PATHS
+            or slug.endswith("-edit")
+            or slug.endswith("-repost")
+        ):
+            return False
     if host in PRIVATEBIN_HOSTS:
         return bool(urlsplit(url).fragment)
     if host in TEXTUP_HOSTS:
