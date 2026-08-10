@@ -1,21 +1,29 @@
+import asyncio
 import json
 import time
 import zlib
 from typing import Dict, Any, List, AsyncIterator
 
 from wastream.config.settings import settings
-from wastream.utils.database import database, rebuild_cache_stats
+from wastream.utils.database import (
+    database,
+    rebuild_cache_stats,
+    run_database_transaction,
+    suppress_cache_stats_updates,
+)
 from wastream.utils.logger import database_logger
 
 # Streaming backup: gzip'd NDJSON (meta line + one tagged row per line) -> flat memory at any size.
 NDJSON_FORMAT = "wastream-ndjson"
 NDJSON_FORMAT_VERSION = 2
 _STREAM_BATCH = 2000
+_WASOURCE_MERGE_BATCH_SIZE = 200
 _GZIP_WBITS = 16 + zlib.MAX_WBITS   # 16 = gzip container
 
 # cap per INSERT to stay under the SQLite/PostgreSQL bind-param limits
 _MAX_BIND_PARAMS = 4500
 _WASOURCE_COLUMNS = ("imdb_id", "tmdb_id", "title", "year", "season", "episode", "data", "created_at", "updated_at")
+_backup_import_lock = asyncio.Lock()
 
 
 # ===========================
@@ -223,12 +231,37 @@ async def _batch_wasource_replace(rows: List[Dict[str, Any]]) -> int:
         if settings.DATABASE_TYPE == "sqlite":
             sql = f"INSERT OR IGNORE INTO wasource ({cols_sql}) VALUES {values_sql}"
         else:
-            sql = f"INSERT INTO wasource ({cols_sql}) VALUES {values_sql} ON CONFLICT (imdb_id, COALESCE(season, -1), COALESCE(episode, -1)) DO NOTHING"
+            conflict_target = "(imdb_id, (COALESCE(season, -1)), (COALESCE(episode, -1)))"
+            sql = (
+                f"INSERT INTO wasource ({cols_sql}) VALUES {values_sql} "
+                f"ON CONFLICT {conflict_target} DO NOTHING"
+            )
         await database.execute(sql, params)
     return total
 
 
-async def import_backup(byte_iter: AsyncIterator[bytes], mode: str, include: Dict[str, bool]) -> Dict[str, Any]:
+async def _merge_wasource_batch(rows: List[Dict[str, Any]]) -> int:
+    async def merge_rows() -> int:
+        total = 0
+        for row in rows:
+            total += await _merge_wasource_row(row)
+        return total
+
+    return await run_database_transaction(
+        merge_rows,
+        "backup WASource merge batch"
+    )
+
+
+async def _replace_wasource_batch(rows: List[Dict[str, Any]]) -> int:
+    return await run_database_transaction(
+        lambda: _batch_wasource_replace(rows),
+        "backup WASource replace batch"
+    )
+
+
+async def _import_backup(
+        byte_iter: AsyncIterator[bytes], mode: str, include: Dict[str, bool]) -> Dict[str, Any]:
     lines = _iter_ndjson(byte_iter)
     try:
         first = await lines.__anext__()
@@ -254,16 +287,23 @@ async def import_backup(byte_iter: AsyncIterator[bytes], mode: str, include: Dic
     stats_touched = False
 
     try:
-        async with database.transaction():
+        async with suppress_cache_stats_updates():
             if mode == "replace":
-                if do_ws:
-                    await database.execute("DELETE FROM wasource")
-                if do_dl:
-                    await database.execute("DELETE FROM dead_links")
-                if do_cc:
-                    await database.execute("DELETE FROM content_cache")
+                async def clear_tables() -> None:
+                    if do_ws:
+                        await database.execute("DELETE FROM wasource")
+                    if do_dl:
+                        await database.execute("DELETE FROM dead_links")
+                    if do_cc:
+                        await database.execute("DELETE FROM content_cache")
 
-            dl_batch, cc_batch, ws_batch = [], [], []
+                await run_database_transaction(
+                    clear_tables,
+                    "backup replace cleanup"
+                )
+
+            dl_batch, cc_batch = [], []
+            ws_replace_batch, ws_merge_batch = [], []
 
             async for raw in lines:
                 if not raw.strip():
@@ -277,41 +317,83 @@ async def import_backup(byte_iter: AsyncIterator[bytes], mode: str, include: Dic
                 if t == "dead_links" and do_dl and o.get("url"):
                     dl_batch.append({"url": o["url"], "expires_at": o.get("expires_at", -1)})
                     if len(dl_batch) >= _STREAM_BATCH:
-                        await _batch_upsert("dead_links", ("url", "expires_at"), "url", dl_batch, mode)
-                        imported["dead_links"] += len(dl_batch)
+                        batch = dl_batch
+                        await run_database_transaction(
+                            lambda: _batch_upsert(
+                                "dead_links", ("url", "expires_at"), "url", batch, mode
+                            ),
+                            "backup dead-links batch"
+                        )
+                        imported["dead_links"] += len(batch)
                         dl_batch = []
 
                 elif t == "content_cache" and do_cc and o.get("cache_key"):
                     stats_touched = True
                     cc_batch.append({"cache_key": o["cache_key"], "content": o.get("content", "[]"), "expires_at": o.get("expires_at", -1)})
                     if len(cc_batch) >= _STREAM_BATCH:
-                        await _batch_upsert("content_cache", ("cache_key", "content", "expires_at"), "cache_key", cc_batch, mode)
-                        imported["content_cache"] += len(cc_batch)
+                        batch = cc_batch
+                        await run_database_transaction(
+                            lambda: _batch_upsert(
+                                "content_cache", ("cache_key", "content", "expires_at"),
+                                "cache_key", batch, mode
+                            ),
+                            "backup content-cache batch"
+                        )
+                        imported["content_cache"] += len(batch)
                         cc_batch = []
 
                 elif t == "wasource" and do_ws and o.get("imdb_id"):
                     stats_touched = True
                     if mode == "replace":
-                        ws_batch.append(o)
-                        if len(ws_batch) >= _STREAM_BATCH:
-                            imported["wasource"] += await _batch_wasource_replace(ws_batch)
-                            ws_batch = []
+                        ws_replace_batch.append(o)
+                        if len(ws_replace_batch) >= _STREAM_BATCH:
+                            batch = ws_replace_batch
+                            imported["wasource"] += await _replace_wasource_batch(batch)
+                            ws_replace_batch = []
                     else:
-                        imported["wasource"] += await _merge_wasource_row(o)
+                        ws_merge_batch.append(o)
+                        if len(ws_merge_batch) >= _WASOURCE_MERGE_BATCH_SIZE:
+                            batch = ws_merge_batch
+                            imported["wasource"] += await _merge_wasource_batch(batch)
+                            ws_merge_batch = []
 
             if dl_batch:
-                await _batch_upsert("dead_links", ("url", "expires_at"), "url", dl_batch, mode)
-                imported["dead_links"] += len(dl_batch)
+                batch = dl_batch
+                await run_database_transaction(
+                    lambda: _batch_upsert(
+                        "dead_links", ("url", "expires_at"), "url", batch, mode
+                    ),
+                    "backup dead-links final batch"
+                )
+                imported["dead_links"] += len(batch)
             if cc_batch:
-                await _batch_upsert("content_cache", ("cache_key", "content", "expires_at"), "cache_key", cc_batch, mode)
-                imported["content_cache"] += len(cc_batch)
-            if ws_batch:
-                imported["wasource"] += await _batch_wasource_replace(ws_batch)
+                batch = cc_batch
+                await run_database_transaction(
+                    lambda: _batch_upsert(
+                        "content_cache", ("cache_key", "content", "expires_at"),
+                        "cache_key", batch, mode
+                    ),
+                    "backup content-cache final batch"
+                )
+                imported["content_cache"] += len(batch)
+            if ws_replace_batch:
+                imported["wasource"] += await _replace_wasource_batch(ws_replace_batch)
+            if ws_merge_batch:
+                imported["wasource"] += await _merge_wasource_batch(ws_merge_batch)
 
-        if stats_touched:
-            await rebuild_cache_stats()
+            if stats_touched:
+                await rebuild_cache_stats()
         return {"success": True, "mode": mode, "imported": imported}
 
     except Exception as e:
         database_logger.error(f"[Backup] Stream import failed: {type(e).__name__}: {e}")
         return {"error": "import_failed"}
+
+
+async def import_backup(
+        byte_iter: AsyncIterator[bytes], mode: str, include: Dict[str, bool]) -> Dict[str, Any]:
+    if _backup_import_lock.locked():
+        return {"error": "import_in_progress"}
+
+    async with _backup_import_lock:
+        return await _import_backup(byte_iter, mode, include)

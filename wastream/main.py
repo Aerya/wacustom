@@ -19,7 +19,9 @@ from wastream.utils.http_client import http_client
 from wastream.config.settings import settings
 from wastream.utils.logger import setup_logger, addon_logger, api_logger, user_id_var
 from wastream.services.health import start_background_health_check
+from wastream.services.domain_sync import start_background_domain_sync
 from wastream.services.pastebin_scraper import start_pastebin_scraper_loop
+from wastream.services.idrix_scraper import start_idrix_scraper_loop
 from wastream.services.settings_manager import apply_startup_overrides
 
 
@@ -108,6 +110,32 @@ async def lifespan(app: FastAPI):
     await setup_database()
     await apply_startup_overrides()
 
+    has_direct_source = any((
+        settings.WAWACITY_URL,
+        settings.FREE_TELECHARGER_URL,
+        settings.DARKI_API_URL,
+        settings.MOVIX_URL,
+        settings.WEBSHARE_URL,
+        settings.ZONE_TELECHARGEMENT_URL,
+    ))
+    has_import_feeder = bool(settings.PASTEBIN_SCRAPER_URLS or settings.IDRIX_SCRAPER_URLS)
+    if not has_direct_source and not has_import_feeder:
+        addon_logger.warning("No direct source or import feeder configured; the addon will not find content")
+    addon_logger.info(f"Wawacity: {settings.WAWACITY_URL or 'NOT CONFIGURED'}")
+    addon_logger.info(f"Free-Telecharger: {settings.FREE_TELECHARGER_URL or 'NOT CONFIGURED'}")
+    addon_logger.info(f"Darki-API: {settings.DARKI_API_URL or 'NOT CONFIGURED'}")
+    addon_logger.info(f"Movix: {settings.MOVIX_URL or 'NOT CONFIGURED'}")
+    addon_logger.info(f"Webshare: {settings.WEBSHARE_URL or 'NOT CONFIGURED'}")
+    addon_logger.info(f"Zone-Telechargement: {settings.ZONE_TELECHARGEMENT_URL or 'NOT CONFIGURED'}")
+    addon_logger.info(
+        f"Pastebin Scraper: {len(settings.PASTEBIN_SCRAPER_URLS)} URL(s)"
+        if settings.PASTEBIN_SCRAPER_URLS else "Pastebin Scraper: NOT CONFIGURED"
+    )
+    addon_logger.info(
+        f"Idrix Scraper: {len(settings.IDRIX_SCRAPER_URLS)} URL(s)"
+        if settings.IDRIX_SCRAPER_URLS else "Idrix Scraper: NOT CONFIGURED"
+    )
+
     # Toutes les tâches de fond doivent être référencées : l'event loop ne
     # garde qu'une référence FAIBLE, donc une tâche dont plus personne ne
     # detient le handle peut etre ramassee par le garbage collector en pleine
@@ -119,7 +147,9 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(rebuild_cache_stats()),
         asyncio.create_task(cleanup_expired_data()),
         asyncio.create_task(start_background_health_check()),
+        asyncio.create_task(start_background_domain_sync()),
         asyncio.create_task(start_pastebin_scraper_loop()),
+        asyncio.create_task(start_idrix_scraper_loop()),
     ]
 
     yield
@@ -163,23 +193,11 @@ app.include_router(router)
 # Application Entry Point
 # ===========================
 if __name__ == "__main__":
-
-    if not settings.WAWACITY_URL and not settings.FREE_TELECHARGER_URL and not settings.DARKI_API_URL and not settings.MOVIX_URL and not settings.WEBSHARE_URL:
-        addon_logger.error("No source configured (WAWACITY_URL, FREE_TELECHARGER_URL, DARKI_API_URL, MOVIX_URL, WEBSHARE_URL)!")
-        addon_logger.error("The addon will not be able to find any content!")
-        addon_logger.error("Please configure at least one source in your .env file")
-
     addon_logger.info(f"Starting {settings.ADDON_NAME} v{settings.ADDON_MANIFEST['version']} ({settings.ADDON_ID})")
     addon_logger.info(f"Server: http://localhost:{settings.PORT}/")
-    addon_logger.info(f"Wawacity: {settings.WAWACITY_URL or 'NOT CONFIGURED'}")
-    addon_logger.info(f"Free-Telecharger: {settings.FREE_TELECHARGER_URL or 'NOT CONFIGURED'}")
-    addon_logger.info(f"Darki-API: {settings.DARKI_API_URL or 'NOT CONFIGURED'}")
-    addon_logger.info(f"Movix: {settings.MOVIX_URL or 'NOT CONFIGURED'}")
-    addon_logger.info(f"Webshare: {settings.WEBSHARE_URL or 'NOT CONFIGURED'}")
     addon_logger.info(f"Nyaa: {settings.NYAA_URL or 'NOT CONFIGURED'}")
     addon_logger.info(f"Database: {settings.DATABASE_TYPE} v{settings.DATABASE_VERSION}")
     addon_logger.info(f"Proxy: {'enabled' if settings.PROXY_URL else 'disabled'}")
-    addon_logger.info(f"Pastebin Scraper: {len(settings.PASTEBIN_SCRAPER_URLS)} URL(s)" if settings.PASTEBIN_SCRAPER_URLS else "Pastebin Scraper: NOT CONFIGURED")
     addon_logger.info(f"Log level: {settings.LOG_LEVEL}")
 
     uvicorn.run(

@@ -3818,7 +3818,7 @@
                             <p style="opacity: 0.7; margin-bottom: 16px; font-size: 13px;">Restore from a backup file. <strong>Merge</strong> adds and updates without deleting; <strong>Replace</strong> wipes the selected data first.</p>
                             <input type="file" id="importFile" accept=".gz,.ndjson,.json,application/gzip,application/json" style="display: none;" onchange="document.getElementById('importFileName').textContent = this.files.length ? this.files[0].name : 'No file selected';">
                             <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 18px;">
-                                <button type="button" class="btn-small" style="background: var(--bg-tertiary); border: 1px solid var(--border-strong); color: var(--text-secondary);" onclick="document.getElementById('importFile').click()">
+                                <button id="importChooseBtn" type="button" class="btn-small" style="background: var(--bg-tertiary); border: 1px solid var(--border-strong); color: var(--text-secondary);" onclick="document.getElementById('importFile').click()">
                                     <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm-1 7V3.5L18.5 9H13z"/></svg>
                                     Choose file
                                 </button>
@@ -3846,10 +3846,11 @@
                                 <label class="custom-checkbox"><input type="checkbox" id="importContentCache" checked><span class="checkmark"></span></label>
                                 <label class="checkbox-text" for="importContentCache">Content cache (searches &amp; streams)</label>
                             </div>
-                            <button class="btn-small btn-primary" style="margin-top: 18px;" onclick="importData()">
+                            <button id="importBtn" class="btn-small btn-primary" style="margin-top: 18px;" onclick="importData()">
                                 <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
                                 Import
                             </button>
+                            <span id="importStatus" role="status" aria-live="polite" style="display: inline-flex; align-items: center; gap: 8px; margin-left: 12px; opacity: 0.75; font-size: 13px;"></span>
                         </div>
                     </div>
                 </div>
@@ -4746,6 +4747,8 @@
         }
 
         async function importData() {
+            if (importInProgress) return;
+
             const fileInput = document.getElementById('importFile');
             if (!fileInput.files.length) {
                 showToast('error', 'No file', 'Choose a backup file first');
@@ -4766,7 +4769,48 @@
             }
         }
 
+        let importInProgress = false;
+
+        function setImportInProgress(inProgress) {
+            const button = document.getElementById('importBtn');
+            const chooseButton = document.getElementById('importChooseBtn');
+            const fileInput = document.getElementById('importFile');
+            const status = document.getElementById('importStatus');
+            const modeInputs = document.querySelectorAll('input[name="importMode"]');
+            const contentInputs = [
+                document.getElementById('importWasource'),
+                document.getElementById('importDeadLinks'),
+                document.getElementById('importContentCache')
+            ];
+
+            importInProgress = inProgress;
+            if (!button || !fileInput || !status) return;
+
+            if (inProgress) {
+                button.dataset.idleHtml = button.innerHTML;
+                button.disabled = true;
+                button.setAttribute('aria-busy', 'true');
+                if (chooseButton) chooseButton.disabled = true;
+                fileInput.disabled = true;
+                modeInputs.forEach(input => { input.disabled = true; });
+                contentInputs.forEach(input => { if (input) input.disabled = true; });
+                button.innerHTML = '<span class="loading-spinner" style="width:14px;height:14px;border-width:2px;margin-right:6px;display:inline-block;vertical-align:-2px;"></span>Importing…';
+                status.innerHTML = '<span class="loading-spinner" style="width:14px;height:14px;border-width:2px;margin:0;"></span><span>Import in progress…</span>';
+            } else {
+                button.disabled = false;
+                button.setAttribute('aria-busy', 'false');
+                if (chooseButton) chooseButton.disabled = false;
+                fileInput.disabled = false;
+                modeInputs.forEach(input => { input.disabled = false; });
+                contentInputs.forEach(input => { if (input) input.disabled = false; });
+                button.innerHTML = button.dataset.idleHtml || button.innerHTML;
+                status.textContent = '';
+            }
+        }
+
         async function sendImport(file, mode) {
+            if (importInProgress) return;
+            setImportInProgress(true);
             try {
                 const params = new URLSearchParams({
                     mode: mode,
@@ -4794,6 +4838,8 @@
             } catch (error) {
                 console.error('Failed to import:', error);
                 showToast('error', 'Error', 'Import failed');
+            } finally {
+                setImportInProgress(false);
             }
         }
 
@@ -4819,6 +4865,10 @@
                 applyAdvancedState();
                 refreshPastebinControl();
                 ensurePastebinPoll();
+                refreshIdrixControl();
+                ensureIdrixPoll();
+                refreshDomainSyncControl();
+                ensureDomainSyncPoll();
             } catch (error) {
                 console.error('Failed to load settings:', error);
                 container.textContent = 'Failed to load settings';
@@ -4914,7 +4964,11 @@
             const toggle = advCount > 0
                 ? `<button type="button" class="settings-category-toggle" onclick="toggleCategoryAdvanced(this)">${advCount} advanced<svg class="settings-category-chevron" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></button>`
                 : '';
-            const extra = cat.category === 'Pastebin' ? renderPastebinControl() : '';
+            const extra = cat.category === 'Pastebin'
+                ? renderPastebinControl()
+                : (cat.category === 'Idrix'
+                    ? renderIdrixControl()
+                    : (cat.category === 'Domain synchronization' ? renderDomainSyncControl() : ''));
             return `<div class="settings-category">
                 <div class="settings-category-title"><span>${escapeHtml(cat.category)}</span>${toggle}</div>
                 ${extra}
@@ -4971,6 +5025,114 @@
             refreshPastebinControl();
         }
 
+        function renderIdrixControl() {
+            return `<div class="pastebin-control" style="display:flex; align-items:center; gap:10px; margin:2px 0 14px;">
+                <button type="button" class="btn-small btn-primary" id="idrixRunBtn" onclick="runIdrixScraperNow()">Run now</button>
+                <button type="button" class="btn-small btn-danger" id="idrixStopBtn" onclick="stopIdrixScraperNow()">Stop</button>
+                <span id="idrixControlStatus" style="font-size:12px; color:var(--text-muted);">—</span>
+            </div>`;
+        }
+
+        async function refreshIdrixControl() {
+            const runBtn = document.getElementById('idrixRunBtn');
+            if (!runBtn) return;
+            const stopBtn = document.getElementById('idrixStopBtn');
+            const status = document.getElementById('idrixControlStatus');
+            try {
+                const res = await fetch('/admin/api/idrix-scraper');
+                if (!res.ok) return;
+                const state = await res.json();
+                if (state.running) {
+                    runBtn.disabled = true;
+                    stopBtn.disabled = false;
+                    status.textContent = state.stop_requested ? 'stopping…' : `running (${state.progress}/${state.progress_total})`;
+                } else {
+                    runBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    status.textContent = 'idle';
+                }
+            } catch (e) {}
+        }
+
+        async function runIdrixScraperNow() {
+            try {
+                const res = await fetch('/admin/api/idrix-scraper/run', { method: 'POST' });
+                const data = await res.json();
+                const map = { started: 'Scrape started', already_running: 'Already running', no_urls: 'No Idrix URLs configured', no_tmdb_key: 'TMDB API key required' };
+                showToast(data.result === 'started' ? 'success' : 'error', 'Idrix', map[data.result] || data.result);
+            } catch (e) { showToast('error', 'Idrix', 'Request failed'); }
+            refreshIdrixControl();
+        }
+
+        async function stopIdrixScraperNow() {
+            try {
+                const res = await fetch('/admin/api/idrix-scraper/stop', { method: 'POST' });
+                const data = await res.json();
+                const map = { stopping: 'Stop requested', not_running: 'Not running' };
+                showToast(data.result === 'stopping' ? 'success' : 'error', 'Idrix', map[data.result] || data.result);
+            } catch (e) { showToast('error', 'Idrix', 'Request failed'); }
+            refreshIdrixControl();
+        }
+
+        function renderDomainSyncControl() {
+            return `<div class="pastebin-control" style="display:flex; align-items:center; gap:10px; margin:2px 0 14px;">
+                <button type="button" class="btn-small btn-primary" id="domainSyncRunBtn" onclick="runDomainSyncNow()">Run now</button>
+                <button type="button" class="btn-small btn-danger" id="domainSyncStopBtn" onclick="stopDomainSyncNow()">Stop</button>
+                <span id="domainSyncControlStatus" style="font-size:12px; color:var(--text-muted);">â€”</span>
+            </div>`;
+        }
+
+        async function refreshDomainSyncControl() {
+            const runBtn = document.getElementById('domainSyncRunBtn');
+            if (!runBtn) return;
+            const stopBtn = document.getElementById('domainSyncStopBtn');
+            const status = document.getElementById('domainSyncControlStatus');
+            try {
+                const res = await fetch('/admin/api/domain-sync');
+                if (!res.ok) return;
+                const sync = await res.json();
+                if (sync.running) {
+                    runBtn.disabled = true;
+                    stopBtn.disabled = false;
+                    status.textContent = sync.stop_requested ? 'stoppingâ€¦' : 'running';
+                } else {
+                    runBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    if (!sync.enabled) {
+                        status.textContent = 'automatic sync disabled';
+                    } else if (sync.last_run) {
+                        status.textContent = `idle Â· last run ${new Date(sync.last_run * 1000).toLocaleString()}`;
+                    } else {
+                        status.textContent = 'idle';
+                    }
+                }
+            } catch (e) {}
+        }
+
+        async function runDomainSyncNow() {
+            try {
+                const res = await fetch('/admin/api/domain-sync/run', { method: 'POST' });
+                const data = await res.json();
+                const map = {
+                    started: 'Synchronization started',
+                    already_running: 'Already running',
+                    no_channels: 'No Telegram channels configured'
+                };
+                showToast(data.result === 'started' ? 'success' : 'error', 'Domain sync', map[data.result] || data.result);
+            } catch (e) { showToast('error', 'Domain sync', 'Request failed'); }
+            refreshDomainSyncControl();
+        }
+
+        async function stopDomainSyncNow() {
+            try {
+                const res = await fetch('/admin/api/domain-sync/stop', { method: 'POST' });
+                const data = await res.json();
+                const map = { stopping: 'Stop requested', not_running: 'Not running' };
+                showToast(data.result === 'stopping' ? 'success' : 'error', 'Domain sync', map[data.result] || data.result);
+            } catch (e) { showToast('error', 'Domain sync', 'Request failed'); }
+            refreshDomainSyncControl();
+        }
+
         let _pastebinPoll = null;
         function ensurePastebinPoll() {
             if (_pastebinPoll) return;
@@ -4978,6 +5140,24 @@
                 const btn = document.getElementById('pastebinRunBtn');
                 // offsetParent is null when the Settings page is hidden (display:none) -> pause polling
                 if (btn && btn.offsetParent !== null) refreshPastebinControl();
+            }, 3000);
+        }
+
+        let _idrixPoll = null;
+        function ensureIdrixPoll() {
+            if (_idrixPoll) return;
+            _idrixPoll = setInterval(() => {
+                const btn = document.getElementById('idrixRunBtn');
+                if (btn && btn.offsetParent !== null) refreshIdrixControl();
+            }, 3000);
+        }
+
+        let _domainSyncPoll = null;
+        function ensureDomainSyncPoll() {
+            if (_domainSyncPoll) return;
+            _domainSyncPoll = setInterval(() => {
+                const btn = document.getElementById('domainSyncRunBtn');
+                if (btn && btn.offsetParent !== null) refreshDomainSyncControl();
             }, 3000);
         }
 

@@ -18,6 +18,7 @@ from wastream.utils.logger import setup_logger, database_logger
 EXCLUDED_SETTINGS = frozenset({
     "SECRET_KEY",
     "DATABASE_TYPE", "DATABASE_PATH", "DATABASE_URL", "DATABASE_VERSION",
+    "DATABASE_BUSY_TIMEOUT_SECONDS",
     "PORT",
     "ADDON_ID",
     "ADMIN_PASSWORD", "ADDON_PASSWORD",
@@ -36,7 +37,9 @@ UNSHAREABLE_SETTINGS = frozenset({"CUSTOM_HTML"})
 MULTILINE_SETTINGS = frozenset({"CUSTOM_HTML"})
 
 ADVANCED_SETTINGS = frozenset({
+    "DATABASE_RETRY_MAX_ATTEMPTS", "DATABASE_RETRY_DELAY_SECONDS",
     "DARKIBOX_LINK_TIMEOUT",
+    "ZONE_TELECHARGEMENT_MAX_CONCURRENCY",
     "SCRAPE_LOCK_TTL", "SCRAPE_WAIT_TIMEOUT",
     "HTTP_TIMEOUT", "METADATA_TIMEOUT", "HEALTH_CHECK_TIMEOUT",
     "STREAM_REQUEST_TIMEOUT", "DEBRID_MAX_RETRIES", "DEBRID_RETRY_DELAY_SECONDS", "DEBRID_CACHE_CHECK_HTTP_TIMEOUT",
@@ -44,6 +47,9 @@ ADVANCED_SETTINGS = frozenset({
     "HTTP_CACHE_STREAMS_TTL", "HTTP_CACHE_MANIFEST_TTL", "HTTP_CACHE_CONFIGURE_TTL", "HTTP_CACHE_STALE_WHILE_REVALIDATE",
     "HEALTH_CHECK_INTERVAL", "PASTEBIN_SCRAPER_INTERVAL",
     "PASTEBIN_SCRAPER_MAX_DEPTH", "PASTEBIN_SCRAPER_MAX_PAGES",
+    "IDRIX_SCRAPER_INTERVAL", "IDRIX_SCRAPER_MAX_DEPTH", "IDRIX_SCRAPER_MAX_PAGES",
+    "IDRIX_SCRAPER_RETRY_MAX_ATTEMPTS", "IDRIX_SCRAPER_RETRY_DELAY_SECONDS",
+    "DOMAIN_SYNC_INTERVAL", "DOMAIN_SYNC_HEALTH_ERROR_RECHECK_DELAY_SECONDS",
     "PROXY_URL",
 })
 
@@ -61,6 +67,12 @@ CHOICES = {
 NEXT_CYCLE_SETTINGS = frozenset({
     "PASTEBIN_SCRAPER_URLS", "PASTEBIN_SCRAPER_INTERVAL", "HEALTH_CHECK_INTERVAL", "CLEANUP_INTERVAL",
     "PASTEBIN_SCRAPER_MAX_DEPTH", "PASTEBIN_SCRAPER_MAX_PAGES",
+    "IDRIX_SCRAPER_URLS", "IDRIX_SCRAPER_INTERVAL", "IDRIX_SCRAPER_MAX_DEPTH", "IDRIX_SCRAPER_MAX_PAGES",
+    "IDRIX_SCRAPER_RETRY_MAX_ATTEMPTS", "IDRIX_SCRAPER_RETRY_DELAY_SECONDS",
+    "DOMAIN_SYNC_ENABLED", "DOMAIN_SYNC_INTERVAL", "DOMAIN_SYNC_RECHECK_ON_HEALTH_ERROR",
+    "DOMAIN_SYNC_HEALTH_ERROR_RECHECK_DELAY_SECONDS", "DOMAIN_SYNC_ZONE_TELECHARGEMENT_TELEGRAM_URL",
+    "DOMAIN_SYNC_WAWACITY_TELEGRAM_URL", "DOMAIN_SYNC_MOVIX_TELEGRAM_URL",
+    "DOMAIN_SYNC_FREE_TELECHARGER_TELEGRAM_URL",
 })
 
 SETTINGS_FORMAT_VERSION = 1
@@ -69,6 +81,7 @@ EDITORS = {
     "DARKIMOVIX_KITSU_TMDB_MAPPING": "imdb-list",
     "KITSU_IMDB_OVERRIDE": "kitsu-override",
     "PASTEBIN_SCRAPER_URLS": "url-list",
+    "IDRIX_SCRAPER_URLS": "url-list",
 }
 
 # Opt-in suggested values (not forced as defaults).
@@ -85,6 +98,9 @@ DESCRIPTIONS = {
     "DARKI_API_KEY": "Optional API key for Darki-API.",
     "MOVIX_URL": "Movix base URL (the API URL is auto-generated as api.{domain}).",
     "WEBSHARE_URL": "Webshare base URL.",
+    "ZONE_TELECHARGEMENT_URL": "Zone-Telechargement base URL.",
+    "DATABASE_RETRY_MAX_ATTEMPTS": "Max attempts including the first try for transient database lock or serialization errors (default: 8).",
+    "DATABASE_RETRY_DELAY_SECONDS": "Initial delay between transient database retries in seconds (default: 0.25).",
     "YGGREBORN_URL": "YggReborn Torznab endpoint.",
     "YGGREBORN_API_KEY": "YggReborn API key.",
     "TR4KER_URL": "TR4KER Torznab endpoint.",
@@ -103,6 +119,8 @@ DESCRIPTIONS = {
     "WAWACITY_MAX_SEARCH_PAGES": "Max search result pages (default: 3).",
     "FREE_TELECHARGER_MAX_SEARCH_PAGES": "Max search result pages for Free-Telecharger (default: 3).",
     "WEBSHARE_MAX_SEARCH_PAGES": "Max search result pages for Webshare (default: 3).",
+    "ZONE_TELECHARGEMENT_MAX_SEARCH_PAGES": "Max search result pages for Zone-Telechargement (default: 3).",
+    "ZONE_TELECHARGEMENT_MAX_CONCURRENCY": "Max simultaneous Zoneurs link resolutions for Zone-Telechargement (default: 16).",
     "DARKI_API_MAX_LINK_PAGES": "Max link pages to fetch (default: 5).",
     "DARKIBOX_LINK_TIMEOUT": "Soft timeout in seconds for Darkibox links (default: 2).",
     "CONTENT_CACHE_TTL": "Content cache duration: -1 = permanent, or seconds (default: 3600 = 1 hour).",
@@ -132,23 +150,46 @@ DESCRIPTIONS = {
     "PASTEBIN_SCRAPER_INTERVAL": "Scrape interval in seconds (default: 86400 = 24h).",
     "PASTEBIN_SCRAPER_MAX_DEPTH": "Max recursion depth when a page has only codes and its links are followed to reach content pages (default: 5).",
     "PASTEBIN_SCRAPER_MAX_PAGES": "Max pages fetched per starting URL when following index pages (default: 1000, logged if reached).",
+    "IDRIX_SCRAPER_URLS": "Rentry/Textup catalog URLs or Idrix PrivateBin URLs (keep the #key fragment for PrivateBin).",
+    "IDRIX_SCRAPER_INTERVAL": "Scrape interval in seconds (default: 86400 = 24h).",
+    "IDRIX_SCRAPER_MAX_DEPTH": "Max discovery depth for linked Idrix catalog pages (default: 5).",
+    "IDRIX_SCRAPER_MAX_PAGES": "Max pages fetched per starting URL (default: 1000).",
+    "IDRIX_SCRAPER_RETRY_MAX_ATTEMPTS": "Max attempts for transient Idrix page errors such as HTTP 429/5xx (default: 3).",
+    "IDRIX_SCRAPER_RETRY_DELAY_SECONDS": "Base delay between Idrix retries in seconds; Retry-After is respected (default: 2).",
+    "DOMAIN_SYNC_ENABLED": "Enable automatic source-domain updates from configured Telegram channels (default: false).",
+    "DOMAIN_SYNC_INTERVAL": "Full domain synchronization interval in seconds (default: 7200).",
+    "DOMAIN_SYNC_RECHECK_ON_HEALTH_ERROR": "Recheck a source domain when its health check reports it offline.",
+    "DOMAIN_SYNC_HEALTH_ERROR_RECHECK_DELAY_SECONDS": "Minimum delay between health-triggered rechecks (default: 900).",
+    "DOMAIN_SYNC_WAWACITY_TELEGRAM_URL": "Public Telegram channel used to discover Wawacity domains.",
+    "DOMAIN_SYNC_FREE_TELECHARGER_TELEGRAM_URL": "Public Telegram channel used to discover Free-Telecharger domains.",
+    "DOMAIN_SYNC_MOVIX_TELEGRAM_URL": "Public Telegram channel used to discover Movix domains.",
+    "DOMAIN_SYNC_ZONE_TELECHARGEMENT_TELEGRAM_URL": "Public Telegram channel used to discover Zone-Telechargement domains.",
     "CUSTOM_HTML": "Custom HTML shown on the web interface.",
 }
 
 # UI layout AND editable-keys allowlist. Order = display order.
 SETTINGS_LAYOUT = [
     ("Addon", ["ADDON_NAME"]),
-    ("Sources", ["WAWACITY_URL", "FREE_TELECHARGER_URL", "DARKI_API_URL", "DARKI_API_KEY", "MOVIX_URL", "WEBSHARE_URL"]),
+    ("Sources", ["WAWACITY_URL", "FREE_TELECHARGER_URL", "DARKI_API_URL", "DARKI_API_KEY", "MOVIX_URL", "WEBSHARE_URL", "ZONE_TELECHARGEMENT_URL"]),
     ("Trackers", ["YGGREBORN_URL", "YGGREBORN_API_KEY", "TR4KER_URL", "TR4KER_API_KEY",
                   "TORR9_URL", "TORR9_API_KEY", "C411_URL", "C411_API_KEY",
                   "GEMINI_URL", "GEMINI_API_KEY", "GENERATIONFREE_URL", "GENERATIONFREE_API_KEY",
                   "ZILEAN_URL"]),
     ("TMDB", ["TMDB_API_KEY"]),
+    ("Database resilience", ["DATABASE_RETRY_MAX_ATTEMPTS", "DATABASE_RETRY_DELAY_SECONDS"]),
     ("Kitsu / Anime", ["DARKIMOVIX_KITSU_TMDB_MAPPING", "KITSU_IMDB_OVERRIDE"]),
     ("Pagination", ["WAWACITY_MAX_SEARCH_PAGES", "FREE_TELECHARGER_MAX_SEARCH_PAGES", "WEBSHARE_MAX_SEARCH_PAGES",
-                    "DARKI_API_MAX_LINK_PAGES", "DARKIBOX_LINK_TIMEOUT"]),
+                    "ZONE_TELECHARGEMENT_MAX_SEARCH_PAGES", "DARKI_API_MAX_LINK_PAGES", "DARKIBOX_LINK_TIMEOUT"]),
+    ("Scraper concurrency", ["ZONE_TELECHARGEMENT_MAX_CONCURRENCY"]),
     ("Pastebin", ["PASTEBIN_SCRAPER_URLS", "PASTEBIN_SCRAPER_INTERVAL",
                   "PASTEBIN_SCRAPER_MAX_DEPTH", "PASTEBIN_SCRAPER_MAX_PAGES"]),
+    ("Idrix", ["IDRIX_SCRAPER_URLS", "IDRIX_SCRAPER_INTERVAL", "IDRIX_SCRAPER_MAX_DEPTH",
+               "IDRIX_SCRAPER_MAX_PAGES", "IDRIX_SCRAPER_RETRY_MAX_ATTEMPTS",
+               "IDRIX_SCRAPER_RETRY_DELAY_SECONDS"]),
+    ("Domain synchronization", ["DOMAIN_SYNC_ENABLED", "DOMAIN_SYNC_INTERVAL",
+        "DOMAIN_SYNC_RECHECK_ON_HEALTH_ERROR", "DOMAIN_SYNC_HEALTH_ERROR_RECHECK_DELAY_SECONDS",
+        "DOMAIN_SYNC_WAWACITY_TELEGRAM_URL", "DOMAIN_SYNC_FREE_TELECHARGER_TELEGRAM_URL",
+        "DOMAIN_SYNC_MOVIX_TELEGRAM_URL", "DOMAIN_SYNC_ZONE_TELECHARGEMENT_TELEGRAM_URL"]),
     ("Cache", ["CONTENT_CACHE_TTL", "CONTENT_CACHE_MODE", "DEAD_LINK_TTL"]),
     ("Debrid", ["STREAM_REQUEST_TIMEOUT", "DEBRID_MAX_RETRIES", "DEBRID_RETRY_DELAY_SECONDS",
                 "DEBRID_CACHE_CHECK_HTTP_TIMEOUT", "DEBRID_HTTP_ERROR_MAX_RETRIES", "DEBRID_HTTP_ERROR_RETRY_DELAY"]),
@@ -166,6 +207,9 @@ EDITABLE_KEYS = frozenset(k for _, keys in SETTINGS_LAYOUT for k in keys)
 
 # Env-provided fields, snapshotted at import (before any setattr mutates model_fields_set). Env always wins.
 _ENV_LOCKED = frozenset(settings.model_fields_set)
+LEGACY_SETTING_ALIASES = {
+    "DOMAIN_SYNC_ZT_TELEGRAM_URL": "DOMAIN_SYNC_ZONE_TELECHARGEMENT_TELEGRAM_URL",
+}
 
 _settings_write_lock = asyncio.Lock()
 
@@ -246,8 +290,12 @@ async def _load_overrides() -> Dict[str, Any]:
     rows = await database.fetch_all("SELECT setting_key, setting_value FROM settings_overrides")
     out: Dict[str, Any] = {}
     for r in rows:
+        raw_key = r["setting_key"]
+        key = LEGACY_SETTING_ALIASES.get(raw_key, raw_key)
         try:
-            out[r["setting_key"]] = _decode_override(r["setting_value"])
+            value = _decode_override(r["setting_value"])
+            if key not in out or raw_key == key:
+                out[key] = value
         except (json.JSONDecodeError, TypeError, ValueError):
             continue
     return out
