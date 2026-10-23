@@ -8,6 +8,7 @@ version = "1.0.0"
 description = "Stremio addon to convert DDL to streams via debrid services"
 requires-python = ">=3.11"
 dependencies = [
+    "certifi>=2026.10.19",
     "fastapi",
     "uvicorn",
     "selectolax",
